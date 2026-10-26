@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Discord live sentiment</title>
+  <link rel="stylesheet" href="sidepanel.css" />
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <span class="dot" id="statusDot"></span>
+      <div>
+        <div class="title">Live sentiment</div>
+        <div class="sub" id="channel">no channel</div>
+      </div>
+    </div>
+    <div class="actions">
+      <button id="pauseBtn" class="btn" title="Pause the feed">pause</button>
+      <button id="clearBtn" class="btn" title="Clear server buffer">clear</button>
+    </div>
+  </header>
+
+  <section class="hero">
+    <div class="scoreRow">
+      <div class="score" id="mean">±0.00</div>
+      <div class="metrics">
+        <div class="metric"><span id="rate">0</span><label>msg/min</label></div>
+        <div class="metric"><span id="count">0</span><label>messages</label></div>
+        <div class="metric"><span id="trend">0.00</span><label>trend</label></div>
+      </div>
+    </div>
+    <div class="gauge">
+      <div class="gaugeTrack"><div class="gaugeMark" id="gaugeMark"></div></div>
+      <div class="gaugeScale"><span>-1</span><span>0</span><span>+1</span></div>
+    </div>
+    <canvas id="spark" height="40"></canvas>
+    <div class="mix">
+      <div class="mixBar"><div class="mixP" id="mixP"></div><div class="mixN" id="mixN"></div></div>
+      <div class="mixLabels"><span id="mixPos">0% positive</span><span id="mixNeg">0% negative</span></div>
+    </div>
+  </section>
+
+  <section class="topics">
+    <div class="sectionHead">
+      most talked about
+      <span class="jevBadge" id="jevBadge">jev –</span>
+    </div>
+    <div class="hotLine" id="hotLine"></div>
+    <div id="topicList" class="topicList"><div class="empty">no topics yet</div></div>
+  </section>
+
+  <section class="feedWrap">
+    <div class="sectionHead">stream <span class="mono" id="feedCount"></span></div>
+    <div id="feed" class="feed"><div class="empty">open a Discord channel with this panel open.</div></div>
+  </section>
+
+  <footer class="foot">
+    <label class="toggle"><input type="checkbox" id="hudToggle" checked /> on-page pill</label>
+    <label class="serverField">
+      server
+      <input id="serverInput" type="text" spellcheck="false" />
+    </label>
+  </footer>
+
+  <script src="sidepanel.js"></script>
+</body>
+</html>
