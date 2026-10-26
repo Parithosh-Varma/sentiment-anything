@@ -603,14 +603,20 @@ export class TopicEngine {
   }
 }
 
-/** {label, count} for the most common non-neutral intent, or null. */
+/** {label, count} for the most common non-neutral intent; null when nothing dominates. */
 function dominantIntent(intents) {
   let best = null;
+  let tied = false;
   for (const [label, count] of Object.entries(intents || {})) {
     if (label === 'neutral' || !count) continue;
-    if (!best || count > best.count) best = { label, count };
+    if (!best || count > best.count) {
+      best = { label, count };
+      tied = false;
+    } else if (count === best.count) {
+      tied = true;
+    }
   }
-  return best;
+  return tied ? null : best;
 }
 
 /** "6 complaint, 2 question" — at most two labels, neutral omitted. */

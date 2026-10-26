@@ -31,6 +31,24 @@ const topics = new TopicEngine({
 topics.start();
 
 const intents = new IntentEngine({ jev });
+
+// Intent labels arrive after the ingest stats broadcast. Coalesce a second stats
+// push so the summary line converges without waiting for the next message.
+let statsTimer = null;
+function scheduleStats() {
+  if (statsTimer) return;
+  statsTimer = setTimeout(() => {
+    statsTimer = null;
+    if (!sseClients.size) return;
+    const key = lastContext?.channelKey || null;
+    broadcast('stats', {
+      channelKey: key,
+      stats: computeStats(windowList(key, DEFAULT_WINDOW_MS)),
+    });
+  }, 700);
+  statsTimer.unref?.();
+}
+
 intents.onResolve = (msg) => {
   topics.setIntent(msg);
   broadcast('update', msg);
@@ -44,6 +62,7 @@ intents.onResolve = (msg) => {
     intentSource: msg.intentSource,
     intentAt: msg.intentAt,
   });
+  scheduleStats();
 };
 
 await fs.mkdir(DATA_DIR, { recursive: true });
@@ -262,8 +281,8 @@ function ingestBatch(messages, context) {
       delete prev.intentCached;
       delete prev.intentReason;
       topics.observe(prev, { replace: true });
-      intents.enqueue(prev);
       persist({ ...prev, update: true });
+      intents.enqueue(prev);
       updated.push(prev);
       accepted++;
       continue;
@@ -467,7 +486,7 @@ const server = http.createServer(async (req, res) => {
       ring.length = 0;
       seen.clear();
       topics.channels.clear();
-      intents.queue.length = 0;
+      intents.reset();
       return json(res, 200, { ok: true });
     }
 

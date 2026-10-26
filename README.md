@@ -132,6 +132,9 @@ Config via env:
 | `JEV_INTENT_MAX_QUEUE` | `600` | pending cap; overflow is labelled heuristically and marked |
 | `JEV_INTENT_RETRIES` | `3` | attempts per message before falling back |
 | `JEV_INTENT_CACHE` | `4000` | identical-text cache entries |
+| `JEV_INTENT_BATCH_MAX` | `10` | ceiling the adaptive batch grows toward |
+| `JEV_INTENT_BACKOFF_MS` | `800` | first retry delay; doubles per consecutive failure |
+| `JEV_INTENT_BACKOFF_CAP_MS` | `30000` | retry delay cap |
 
 Check it from the server: `curl -s localhost:8787/jev`.
 
@@ -234,7 +237,9 @@ Mode: complaints (jev 0.85)
 ```
 
 Everything is appended to `data/transcript-YYYY-MM-DD.jsonl`, so history survives restarts and can
-be re-analyzed later.
+be re-analyzed later. Each line is a message, except late intent labels which land as
+`{"type":"intent","id":…,"channelKey":…,"seq":…,"intent":…}` patches — apply them in order, or join
+on `id` + `channelKey`.
 
 ### Sentiment scoring
 
@@ -262,7 +267,7 @@ sarcasm and inversion are missed. The lexicon is reused by the topic extractor t
 | `GET /feed?since=&limit=&channel=` | backfill |
 | `GET /stats?channel=&window=` | sentiment aggregate |
 | `GET /transcript?format=txt\|jsonl` | full buffer |
-| `POST /clear` | wipe buffers |
+| `POST /clear` | wipe buffers; drops pending intent work |
 
 ### Limits, honestly
 

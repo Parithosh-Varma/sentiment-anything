@@ -134,3 +134,81 @@ test('heuristic labels cover the four intents', () => {
   assert.equal(heuristicIntent('gg wp'), 'praise');
   assert.equal(heuristicIntent('lol'), 'neutral');
 });
+
+class DeferredJev {
+  constructor() {
+    this.pending = [];
+    this.messages = 0;
+  }
+
+  decide(state) {
+    this.messages += state.messages.length;
+    return new Promise((resolve) => {
+      this.pending.push({
+        state,
+        answer: (label) => {
+          const answers = {};
+          state.messages.forEach((_, i) => {
+            answers[`m${i}`] = {
+              type: 'choice',
+              choice: label,
+              probabilities: { [label]: 0.9 },
+              confidence: 0.9,
+            };
+          });
+          resolve({ answers });
+        },
+      });
+    });
+  }
+
+  release(label) {
+    const next = this.pending.shift();
+    assert.ok(next, 'a request is waiting');
+    next.answer(label);
+  }
+}
+
+async function until(check, timeoutMs = 2000) {
+  const deadline = Date.now() + timeoutMs;
+  while (!check()) {
+    if (Date.now() > deadline) throw new Error('timed out');
+    await new Promise((r) => setTimeout(r, 5));
+  }
+}
+
+test('an edit during an in-flight batch does not reuse the stale answer', async () => {
+  const jev = new DeferredJev();
+  const { engine } = setup(jev, { batchSize: 1 });
+
+  const a = m('a1', 'queue is broken');
+  engine.enqueue(a);
+  await until(() => jev.pending.length === 1);
+
+  a.text = 'queue is fixed';
+  engine.enqueue(a);
+
+  jev.release('complaint');
+  await until(() => jev.pending.length === 1);
+
+  assert.equal(a.intent, undefined, 'answer for the old body is discarded');
+  assert.equal(engine.cache.get('queue is fixed'), undefined, 'new body is not poisoned');
+  assert.equal(engine.cache.get('queue is broken')?.intent, 'complaint', 'old body cached under its own key');
+
+  jev.release('praise');
+  await engine.drain(2000);
+  assert.equal(a.intent, 'praise', 'newer revision wins');
+});
+
+test('the 60s window is pruned without status calls', () => {
+  let now = 1_000_000;
+  const engine = new IntentEngine({ jev: null, enabled: false, now: () => now });
+
+  for (let i = 0; i < 650; i++) engine.enqueue(m(`r${i}`, `message ${i}`));
+  assert.equal(engine.recent.length, 650);
+
+  now += 61_000;
+  engine.enqueue(m('later', 'after the window'));
+
+  assert.equal(engine.recent.length, 1, 'old resolutions dropped on the next apply');
+});

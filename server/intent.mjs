@@ -105,6 +105,7 @@ export class IntentEngine {
     this.lastLatencyMs = null;
     this.lastOkAt = null;
     this.recent = [];
+    this.generation = 0;
     this.kickTimer = null;
 
     /** @type {(msg: object) => void} | null */
@@ -129,11 +130,17 @@ export class IntentEngine {
     if (this.queue.length >= this.maxQueue) {
       this.overflow++;
       const victim = this.queue.shift();
-      if (victim) this.#fallback(victim, 'queue overflow');
+      if (victim) this.#fallback({ item: victim, text: victim.msg.text }, 'queue overflow');
     }
 
-    this.queue.push({ msg, attempts: 0, queuedAt: this.now() });
+    this.queue.push({ msg, attempts: 0, queuedAt: this.now(), gen: this.generation });
     this.#schedule();
+  }
+
+  /** Drop pending work (used by POST /clear). Replies for dropped work are ignored. */
+  reset() {
+    this.generation++;
+    this.queue.length = 0;
   }
 
   status() {
@@ -203,27 +210,31 @@ export class IntentEngine {
 
   async #loop() {
     while (this.queue.length && !this.stopped) {
+      const gen = this.generation;
       // serve cache hits without touching the model
       const batch = [];
       while (batch.length < this.batchSize && this.queue.length) {
         const item = this.queue.shift();
-        const hit = this.cache.get(this.#key(item.msg.text));
+        if (item.gen !== gen) continue;
+        // snapshot the body: it may be edited while the request is in flight
+        const text = item.msg.text;
+        const hit = this.cache.get(this.#key(text));
         if (hit) {
           this.cachedHits++;
-          this.#apply(item.msg, hit.intent, hit.prob, 'jev', { cached: true });
+          this.#apply(item.msg, hit.intent, hit.prob, 'jev', { cached: true, text });
           continue;
         }
-        batch.push(item);
+        batch.push({ item, text });
       }
       if (!batch.length) continue;
 
       const state = {
         chat: 'discord-style chat',
-        messages: batch.map((i) => oneLine(i.msg.text)),
+        messages: batch.map((entry) => oneLine(entry.text)),
       };
       const questions = {};
-      batch.forEach((item, i) => {
-        questions[`m${i}`] = questionFor(item.msg.text);
+      batch.forEach((entry, i) => {
+        questions[`m${i}`] = questionFor(entry.text);
       });
 
       const t0 = this.now();
@@ -231,7 +242,7 @@ export class IntentEngine {
         const res = await this.jev.decide(state, questions);
         this.lastLatencyMs = this.now() - t0;
         this.lastOkAt = this.now();
-        this.#absorb(batch, res);
+        this.#absorb(batch, res, gen);
         this.failures = 0;
         if (this.batchSize < this.maxBatch) this.batchSize++;
       } catch (err) {
@@ -239,12 +250,14 @@ export class IntentEngine {
         this.failedCalls++;
         this.lastError = err.message;
         this.lastErrorAt = this.now();
-        for (const item of batch) item.attempts++;
+        for (const entry of batch) entry.item.attempts++;
 
         const retry = [];
-        for (const item of batch) {
-          if (item.attempts < this.retries) retry.push(item);
-          else this.#fallback(item, err.message);
+        for (const entry of batch) {
+          if (entry.item.gen !== this.generation) continue;   // cleared mid-flight
+          if (entry.text !== entry.item.msg.text) continue;   // edited: the newer entry owns it
+          if (entry.item.attempts < this.retries) retry.push(entry.item);
+          else this.#fallback(entry, err.message);
         }
         this.queue.unshift(...retry);
         this.batchSize = Math.max(2, Math.floor(this.batchSize / 2));
@@ -260,40 +273,54 @@ export class IntentEngine {
     }
   }
 
-  #absorb(batch, res) {
+  #absorb(batch, res, gen) {
+    if (gen !== this.generation) return; // cleared while in flight
     const answers = res?.answers || res || {};
-    batch.forEach((item, i) => {
+    batch.forEach((entry, i) => {
       const a = answers[`m${i}`];
       const choice = a && typeof a.choice === 'string' ? a.choice : null;
       if (!choice || !LABELS.includes(choice)) {
-        this.#fallback(item, 'no answer');
+        this.#fallback(entry, 'no answer');
         return;
       }
       const prob = Number(a.probabilities?.[choice] ?? a.confidence ?? 0) || 0;
-      this.cache.set(this.#key(item.msg.text), { intent: choice, prob });
+      // cache under the text that was actually classified, not the current body
+      this.cache.set(this.#key(entry.text), { intent: choice, prob });
       if (this.cache.size > this.cacheSize) {
         const oldest = this.cache.keys().next().value;
         if (oldest !== undefined) this.cache.delete(oldest);
       }
-      this.#apply(item.msg, choice, prob, 'jev');
+      this.#apply(entry.item.msg, choice, prob, 'jev', { text: entry.text });
     });
   }
 
-  #fallback(item, reason) {
+  #fallback(entry, reason) {
+    const { item, text } = entry || {};
+    if (!item) return;
+    if (item.gen !== this.generation) return;
+    if (text !== undefined && item.msg.text !== text) return; // edited; newer revision owns it
     this.heuristic++;
     this.#apply(item.msg, heuristicIntent(item.msg.text), 0, 'heuristic', { reason });
   }
 
-  #apply(msg, intent, prob, source, { cached = false, reason = '' } = {}) {
+  #apply(msg, intent, prob, source, { cached = false, reason = '', text } = {}) {
     if (!msg || msg.intent) return;
+    if (text !== undefined && msg.text !== text) return;
     msg.intent = intent;
     msg.intentProb = Math.round(prob * 1000) / 1000;
     msg.intentSource = source;
     msg.intentCached = cached || undefined;
-    msg.intentAt = this.now();
+    const now = this.now();
+    msg.intentAt = now;
     if (source === 'heuristic' && reason) msg.intentReason = reason;
     this.resolved++;
-    this.recent.push(this.now());
+    this.recent.push(now);
+    if (this.recent.length > 600) {
+      const cutoff = now - 60000;
+      let drop = 0;
+      while (drop < this.recent.length && this.recent[drop] < cutoff) drop++;
+      if (drop) this.recent.splice(0, drop);
+    }
     try {
       this.onResolve?.(msg);
     } catch (err) {

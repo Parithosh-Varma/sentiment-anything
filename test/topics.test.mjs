@@ -88,3 +88,15 @@ test('an edit clears the old intent and the next jev answer replaces it', () => 
   assert.equal(row.intents.complaint, 1, 'other message keeps its label');
   assert.equal(row.intents.praise, 1, 'edited message takes the new label');
 });
+
+test('a split intent count has no dominant label', () => {
+  const engine = new TopicEngine({ jev, logger });
+
+  engine.observe(msg('t1', 'mira', 'ranked mode is cooked', { intent: 'complaint' }));
+  engine.observe(msg('t2', 'kade', 'ranked mode queue is broken', { intent: 'question' }));
+
+  const row = engine.rank(CH, { minCount: 1 }).find((r) => r.key === 'ranked mode');
+  assert.equal(row.intents.complaint, 1);
+  assert.equal(row.intents.question, 1);
+  assert.equal(row.dominant, null, 'ties are not reported as dominant');
+});
