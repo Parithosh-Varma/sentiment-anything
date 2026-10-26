@@ -1,0 +1,20 @@
+{
+  "name": "discord-live-sentiment",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Chrome extension + local server that livestreams the Discord conversation you can see into a live sentiment feed.",
+  "scripts": {
+    "start": "node server/index.mjs",
+    "watch": "node cli/watch.mjs",
+    "dev": "node scripts/dev.mjs",
+    "topics": "node cli/topics.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "linkedom": "^0.18.14"
+  }
+}
